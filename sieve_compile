@@ -1,0 +1,2 @@
+nasm -f elf64 -g -F dwarf sieve.asm -o sieve.o
+ld -o sieve -g sieve.o

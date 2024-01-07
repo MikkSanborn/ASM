@@ -1,0 +1,4 @@
+
+# C and Assembly partially-compiled files
+*.o
+

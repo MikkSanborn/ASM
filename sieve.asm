@@ -1,21 +1,22 @@
 
 BITS 64
 
-%define MAX (0xffff)
-%define COUNT_BYTES (MAX / 16)
+%define MAX (0xffffff)
+%define COUNT_BYTES (MAX >> 4)  ; (MAX / 2) / 8 -- only odds, 8 bits = 1 byte
 
 %macro SYS_PRINT 1
     mov rdx, %1     ; count_chars
-    mov rax, 1      ; 0x01 = sys_write
-    mov rdi, 1      ; fd 1 = stdout
-    mov rsi, str    ; char *buf
+    mov rax, 0x1    ; 0x01 = sys_write
+    mov rdi, 0x1    ; fd 1 = stdout
+    mov rsi, str_end; char *buf
+    sub rsi, rdx
     syscall
 %endmacro
 
 section .data
     ; void* tape. Represents a boolean[COUNT_BYTES]
     tape:   times COUNT_BYTES db 0xff
-    str:    times 16 db 0x00
+    str:    times 0x20 db 0x00
     str_end:
 
 section .text
@@ -58,7 +59,7 @@ _start:
     ; initialize values and set tape<0> = 0
     mov BYTE [tape], 0xfe
 
-    mov esi, 0
+    mov esi, 0x0
 
 ; for (int i = 1; i < COUNT_BYTES; i++)
 main_loop_inc:
@@ -66,7 +67,7 @@ main_loop_inc:
     inc esi
 
     ; i < COUNT_BYTES
-    cmp esi, MAX ; COUNT_BYTES
+    cmp esi, MAX
     jge main_loop_out
 
     ; {
@@ -79,16 +80,19 @@ main_loop_inc:
     mov ecx, esi                ; b = i & 0b0111
     and ecx, 0x7                ;
 
-    mov eax, 1                  ; m = 1 << b
+    mov eax, 0x1                ; m = 1 << b
     shl eax, cl                 ;
         ; ecx free
 
     add rdi, tape               ; t1 = B + t1
-;   mov edi, BYTE PTR [edi]     ; t1 = *(char *) t1
+
+    cmp rdi, str
+    jge main_loop_out
+
     mov dil, BYTE [rdi]         ; t1 = *(char *) t1
     and edi, eax                ; t1 = t1 & m
         ; eax free
-    cmp edi, 0
+    cmp edi, 0x0
     je  main_loop_inc
         ; edi free
 
@@ -105,7 +109,7 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
     add eax, r8d
 
     ; if (j >= COUNT_BYTES) jmp main_loop_inc
-    cmp eax, MAX ; COUNT_BYTES
+    cmp eax, MAX
     jge main_loop_inc
 
     ; {
@@ -126,6 +130,10 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
     xor r9 , r9                 ; (clear r9)
     mov r9d, eax                ; arr = tape + (j >> 3)
     shr r9d, 0x3                ;
+;
+    cmp r9 , COUNT_BYTES        ; shouldn't happen, but does?
+    jge main_loop_inc
+;
     add r9 , tape               ;
 
     xor rcx, rcx                ; m = 1 << (j & 0x7)
@@ -146,47 +154,102 @@ main_loop_out: ; } // implicit, from GOTO used previously
 
         ; all regs free
 
-    ; print "2\n"
-    xor rax, rax
-    mov DWORD [str], 0x0a32
-    mov rax, 2
+        ; temporary byte dump
+;   ; print "2\n"
+;   xor rax, rax
+;   mov DWORD [str], 0x0a32
+;   mov rax, 0x2
 
-    SYS_PRINT rax
+;   SYS_PRINT rax
 
-    mov rdx, COUNT_BYTES ; count_chars
-    mov rax, 1      ; 0x01 = sys_write
-    mov rdi, 1      ; fd 1 = stdout
-    mov rsi, tape   ; char *buf
-    syscall
+;   mov rdx, COUNT_BYTES ; count_chars
+;   mov rax, 0x1    ; 0x01 = sys_write
+;   mov rdi, 0x1    ; fd 1 = stdout
+;   mov rsi, tape   ; char *buf
+;   syscall
 
 ; how to print this correctly/nicely:
-        ; rcx, r8, r9 free?
-;       ; i = rcx
-;   xor rcx, rcx                ; i = 0
-;print_loop_inc:
-;   inc rcx
+        ; rcx, ~r8~, r9 free/safe
+        ; rsi, rdi, rdx, rax are temp
+        ; i = r8
+    xor r8d, r8d                ; i = 0
+print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
+    inc r8d                     ; i++
 
-;   cmp rcx, COUNT_BYTES
-;   jge print_loop_out
+    cmp r8d, MAX                ; if (i >= MAX) break;
+    jge print_loop_out          ;
 
-    ; for (i = 1; i < COUNT_BYTES; i++) {
-    ;   if (tape<i> == 0) continue;
-    ;   char *s = str;
-    ;   *s = '\n';
-    ;   s++/-- <-- find out, make sure to not destroy tape
-    ;   int j = i;
-    ;   while (j != 0) {
-    ;     *s = 0x30 + j & 0b1111;
-    ;     s++;
-    ;     j = j >> 4;
-    ;   }
-    ; }
+    ; B/t1 = rdi, b = rcx, m = rax
+    xor rdi, rdi                ; B = i >> 3
+    mov edi, r8d                ;
+    shr edi, 0x3                ;
 
-;   jmp print_loop_inc
-;print_loop_out:
+    ; TODO potential optimization here by inlining the 8 consecutive
+        ; iterations of checking this individual byte.
+    mov ecx, r8d                ; b = i & 0b0111
+    and ecx, 0x7                ;
+
+    mov eax, 0x1                ; m = 1 << b
+    shl eax,  cl
+
+    cmp rdi, COUNT_BYTES        ; shouldn't happen?
+    jge print_loop_inc          ;
+
+    add rdi, tape               ; t1 = B + t1
+    mov dil, BYTE [rdi]         ; t1 = *(char *) t1
+    and edi, eax                ; t1 = t1 & m
+
+    cmp edi, 0x0                ; if (tape<i> == 0) continue;
+    je print_loop_inc           ;
+        ; eax, edi free, ecx <reserved>
+
+        ; prepare string
+;   mov DWORD [str      ], 0x01020304 ; clean the string
+;   mov DWORD [str + 0x4], 0x05060708 ; (can only do a DWORD at a time)
+;   mov DWORD [str + 0x8], 0x090a0b0c ;
+;   mov DWORD [str + 0xc], 0x0d0e0f10 ;
+
+    mov DWORD [str_end - 0x4], 0x0a000000 ; clean string
+
+    ; count = r9d
+    mov r9 , 0x1                ; count = 0;
+    ; j = eax
+    ;     edi reserved for division!
+    mov eax, r8d                ; j = 2*i + 1; // can modify j without destroying i
+    shl eax, 0x1                ;
+    or  eax, 0x1
+
+calc_loop:
+    cmp eax, 0x0                ; if (j <= 0) break;
+    jle calc_loop_exit          ;
+
+    inc r9d                     ; count++; // pre-increment to keep string
+                                ;             accurate
+
+    ; divide
+    cdq
+    mov ecx, 0xa                ; must use reg
+    idiv ecx                    ; divide by 10 (0xa)
+
+    add edx, 0x30               ; char c = (j % 10) + 0x30;
+    mov rcx, str_end
+    sub rcx, r9
+    mov BYTE [rcx], dl         ; *(str + count) = c;
+    xor edi, edi
+
+    jmp calc_loop           ; }
+
+calc_loop_exit:
+
+;   SYS_PRINT r9                ; print output
+    SYS_PRINT r9                ; print output
+
+    jmp print_loop_inc
+                            ; }
+print_loop_out:
 
     ; exit
-    mov rdi, 0x10
-    mov rax, 60 ; syscall: exit
+    mov rdi, 0x0    ; return code 0
+    mov rax, 0x3c   ; syscall: exit
     ;xor rdi, rdi
     syscall

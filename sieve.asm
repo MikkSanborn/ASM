@@ -1,8 +1,11 @@
 
 BITS 64
 
-%define MAX (0xffffff)
-%define COUNT_BYTES (MAX >> 4)  ; (MAX / 2) / 8 -- only odds, 8 bits = 1 byte
+%define MAX_VAL (0xffffff)
+%define MAX (MAX_VAL >> 1)
+%define COUNT_BYTES (MAX_VAL >> 3)  ; MAX_VAL / 8 -- only odds, 8 bits = 1 byte
+
+%define tape r12
 
 %macro SYS_PRINT 1
     mov rdx, %1     ; count_chars
@@ -15,7 +18,7 @@ BITS 64
 
 section .data
     ; void* tape. Represents a boolean[COUNT_BYTES]
-    tape:   times COUNT_BYTES db 0xff
+;   tape:   times COUNT_BYTES db 0xff
     str:    times 0x20 db 0x00
     str_end:
 
@@ -57,6 +60,35 @@ _start:
 ; rsi, rdi, rdx, rcx, r8, r9, rax
 ; i = rsi, t1 = rdi
     ; initialize values and set tape<0> = 0
+
+    mov r10, rsp
+    sub rsp, COUNT_BYTES
+    and rsp, 0xfffffffffffffff0
+    mov r12, rsp
+
+    xor rsi, rsi                ; clear rsi
+
+    ; need to set all of "tape" as 1's
+    ; >implicit< mov esi, 0x0
+    mov rax, r12
+    mov rdi, rax
+    add rdi, COUNT_BYTES
+
+prefill_loop:
+    cmp rax, rdi
+    jge prefill_out
+
+;   mov rax, r12
+;   add rax, rsi
+
+    mov DWORD [rax      ], 0xffffffff
+    mov DWORD [rax + 0x4], 0xffffffff
+
+    add rax, 0x8
+    jmp prefill_loop
+
+prefill_out:
+
     mov BYTE [tape], 0xfe
 
     mov esi, 0x0
@@ -86,8 +118,10 @@ main_loop_inc:
 
     add rdi, tape               ; t1 = B + t1
 
-    cmp rdi, str
-    jge main_loop_out
+;   cmp rdi, str
+;   jge main_loop_out
+
+    ;; TODO CORRECT
 
     mov dil, BYTE [rdi]         ; t1 = *(char *) t1
     and edi, eax                ; t1 = t1 & m
@@ -153,20 +187,12 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
 main_loop_out: ; } // implicit, from GOTO used previously
 
         ; all regs free
+;   jmp print_lazy_and_exit
 
-        ; temporary byte dump
-;   ; print "2\n"
-;   xor rax, rax
-;   mov DWORD [str], 0x0a32
-;   mov rax, 0x2
+    ; TODO print 2\n
+    mov WORD [str_end - 0x2], 0x0a32
 
-;   SYS_PRINT rax
-
-;   mov rdx, COUNT_BYTES ; count_chars
-;   mov rax, 0x1    ; 0x01 = sys_write
-;   mov rdi, 0x1    ; fd 1 = stdout
-;   mov rsi, tape   ; char *buf
-;   syscall
+    SYS_PRINT 0x2
 
 ; how to print this correctly/nicely:
         ; rcx, ~r8~, r9 free/safe
@@ -209,7 +235,9 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
 ;   mov DWORD [str + 0x8], 0x090a0b0c ;
 ;   mov DWORD [str + 0xc], 0x0d0e0f10 ;
 
-    mov DWORD [str_end - 0x4], 0x0a000000 ; clean string
+;   mov DWORD [str_end - 0x4], 0x0a000000 ; clean string
+
+    mov BYTE [str_end - 0x1], 0x0a
 
     ; count = r9d
     mov r9 , 0x1                ; count = 0;
@@ -248,8 +276,23 @@ calc_loop_exit:
                             ; }
 print_loop_out:
 
+    add rsp, r10
+
     ; exit
     mov rdi, 0x0    ; return code 0
     mov rax, 0x3c   ; syscall: exit
-    ;xor rdi, rdi
     syscall
+
+print_lazy_and_exit:
+        ; temporary byte dump
+    mov rdx, COUNT_BYTES ; count_chars
+    mov rax, 0x1    ; 0x01 = sys_write
+    mov rdi, 0x1    ; fd 1 = stdout
+    mov rsi, tape   ; char *buf
+    syscall
+
+    ; exit
+    mov rdi, 0x0    ; return code 0
+    mov rax, 0x3c   ; syscall: exit
+    syscall
+

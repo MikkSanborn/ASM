@@ -17,8 +17,6 @@ BITS 64
 %endmacro
 
 section .data
-    ; void* tape. Represents a boolean[COUNT_BYTES]
-;   tape:   times COUNT_BYTES db 0xff
     str:    times 0x20 db 0x00
     str_end:
 
@@ -78,9 +76,6 @@ prefill_loop:
     cmp rax, rdi
     jge prefill_out
 
-;   mov rax, r12
-;   add rax, rsi
-
     mov DWORD [rax      ], 0xffffffff
     mov DWORD [rax + 0x4], 0xffffffff
 
@@ -117,9 +112,6 @@ main_loop_inc:
         ; ecx free
 
     add rdi, tape               ; t1 = B + t1
-
-;   cmp rdi, str
-;   jge main_loop_out
 
     ;; TODO CORRECT
 
@@ -164,10 +156,6 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
     xor r9 , r9                 ; (clear r9)
     mov r9d, eax                ; arr = tape + (j >> 3)
     shr r9d, 0x3                ;
-;
-    cmp r9 , COUNT_BYTES        ; shouldn't happen, but does?
-    jge main_loop_inc
-;
     add r9 , tape               ;
 
     xor rcx, rcx                ; m = 1 << (j & 0x7)
@@ -185,13 +173,16 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
     jmp inner_loop_inc
     ; }
 main_loop_out: ; } // implicit, from GOTO used previously
-
         ; all regs free
+
+%ifdef DEBUG
+    ; for debug only --
 ;   jmp print_lazy_and_exit
+    ; -- end debug
+%endif
 
-    ; TODO print 2\n
+    ; print "2\n"
     mov WORD [str_end - 0x2], 0x0a32
-
     SYS_PRINT 0x2
 
 ; how to print this correctly/nicely:
@@ -218,8 +209,8 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
     mov eax, 0x1                ; m = 1 << b
     shl eax,  cl
 
-    cmp rdi, COUNT_BYTES        ; shouldn't happen?
-    jge print_loop_inc          ;
+;   cmp rdi, COUNT_BYTES        ; shouldn't happen?
+;   jge print_loop_inc          ;
 
     add rdi, tape               ; t1 = B + t1
     mov dil, BYTE [rdi]         ; t1 = *(char *) t1
@@ -228,16 +219,6 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
     cmp edi, 0x0                ; if (tape<i> == 0) continue;
     je print_loop_inc           ;
         ; eax, edi free, ecx <reserved>
-
-        ; prepare string
-;   mov DWORD [str      ], 0x01020304 ; clean the string
-;   mov DWORD [str + 0x4], 0x05060708 ; (can only do a DWORD at a time)
-;   mov DWORD [str + 0x8], 0x090a0b0c ;
-;   mov DWORD [str + 0xc], 0x0d0e0f10 ;
-
-;   mov DWORD [str_end - 0x4], 0x0a000000 ; clean string
-
-    mov BYTE [str_end - 0x1], 0x0a
 
     ; count = r9d
     mov r9 , 0x1                ; count = 0;
@@ -269,7 +250,6 @@ calc_loop:
 
 calc_loop_exit:
 
-;   SYS_PRINT r9                ; print output
     SYS_PRINT r9                ; print output
 
     jmp print_loop_inc
@@ -283,6 +263,7 @@ print_loop_out:
     mov rax, 0x3c   ; syscall: exit
     syscall
 
+%ifdef DEBUG
 print_lazy_and_exit:
         ; temporary byte dump
     mov rdx, COUNT_BYTES ; count_chars
@@ -295,4 +276,5 @@ print_lazy_and_exit:
     mov rdi, 0x0    ; return code 0
     mov rax, 0x3c   ; syscall: exit
     syscall
+%endif
 

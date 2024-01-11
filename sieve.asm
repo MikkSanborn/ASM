@@ -1,11 +1,7 @@
 
-; TODO - buffer the print output by making a buffer that's ___ chars long, and
-;       flush every ___ - 0x20
-
 BITS 64
 
-;%define MAX_VAL (0xffffff)
-%define MAX_VAL (0x4000000)
+%define MAX_VAL (0x10000000)
 %define MAX (MAX_VAL >> 1)
 %define COUNT_BYTES (MAX_VAL >> 3)  ; MAX_VAL / 8 -- only odds, 8 bits = 1 byte
 
@@ -66,11 +62,20 @@ _start:
 ; i = rsi, t1 = rdi
     ; initialize values and set tape<0> = 0
 
-    mov r10, rsp                ; save original stack pointer
-    sub rsp, COUNT_BYTES        ; allocate space
-    and rsp, 0xfffffffffffffff0 ; align to nearest 16-bytes
-    mov r12, rsp                ; move base of "tape" to r12 ("tape")
+    ;; how to create space on the heap
+        ; get original break
+    mov rax, 0x0c
+    mov rdi, 0x00
+    syscall
 
+    mov r12, rax                ; save base of heap
+
+    mov rax, 0xc                ; rax = sys_brk
+    mov rdi, r12                ; rdi = break + COUNT_BYTES (new loc)
+    add rdi, COUNT_BYTES        ;
+    syscall                     ; rax = sys_brk(COUNT_BYTES)
+
+    mov r13, rax                ; store copy of end
 
     ; need to set all of "tape" as 1's
     ; >implicit< mov rsi, 0x0
@@ -80,7 +85,7 @@ _start:
 
 prefill_loop:
     cmp rax, rdi
-    jge prefill_out
+    jge prefill_loop_out
 
     mov DWORD [rax      ], 0xffffffff
     mov DWORD [rax + 0x4], 0xffffffff
@@ -88,7 +93,7 @@ prefill_loop:
     add rax, 0x8
     jmp prefill_loop
 
-prefill_out:
+prefill_loop_out:
     mov BYTE [tape], 0xfe
 
     xor rsi, rsi                ; clear rsi
@@ -177,12 +182,12 @@ inner_loop_inc:                 ; for (int j = i + n; j < COUNT_BYTES; j += n)
 
     jmp inner_loop_inc
     ; }
-main_loop_out: ; } // implicit, from GOTO used previously
+main_loop_out: ; }
         ; all regs free
 
 %ifdef DEBUG
     ; for debug only --
-;   jmp print_lazy_and_exit
+    jmp print_lazy_and_exit
     ; -- end debug
 %endif
 
@@ -226,7 +231,6 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
         ; rax, rdi free, rcx <reserved>
 
     ; count = r9
-;   mov r9 , 0x1                ; count = 0;
     ; j = rax
     ;     rdi reserved for division!
     mov rax, r8                 ; j = 2*i + 1; // can modify j without destroying i
@@ -247,12 +251,9 @@ calc_loop:
     idiv rcx                    ; divide by 10 (0xa)
 
     add rdx, 0x30               ; char c = (j % 10) + 0x30;
-;   mov rcx, str_end
-;   sub rcx, r9
     mov rcx, stack
     add rcx, r11
     mov BYTE [rcx], dl         ; *(str + count) = c;
-;   xor rdi, rdi
     inc r11                     ; count_digits++;
 
     jmp calc_loop           ; }
@@ -260,7 +261,6 @@ calc_loop:
 calc_loop_exit:
 
     ; numbers are in wrong order, need to switch
-;   mov BYTE [stack - 0x0], 0x0a  ; for debug, shouldn't work?
     mov rax, str - 0x1
     add rax, r9
     sub rax, r11
@@ -293,7 +293,9 @@ print_loop_out:
     dec r9
     SYS_PRINT r9                ; print remaining output
 
-    add rsp, r10
+    mov rax, 0x0c   ; reset the heap
+    mov rdi, r12    ;
+    syscall         ;
 
     ; exit
     mov rdi, 0x0    ; return code 0

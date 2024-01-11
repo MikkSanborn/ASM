@@ -4,9 +4,13 @@
 
 BITS 64
 
-%define MAX_VAL (0xffffff)
+;%define MAX_VAL (0xffffff)
+%define MAX_VAL (0x4000000)
 %define MAX (MAX_VAL >> 1)
 %define COUNT_BYTES (MAX_VAL >> 3)  ; MAX_VAL / 8 -- only odds, 8 bits = 1 byte
+
+%define STR_LEN (0x1000)
+%define STACK_SIZE (0x20)
 
 %define tape r12
 
@@ -14,14 +18,14 @@ BITS 64
     mov rdx, %1     ; count_chars
     mov rax, 0x1    ; 0x01 = sys_write
     mov rdi, 0x1    ; fd 1 = stdout
-    mov rsi, str_end; char *buf
-    sub rsi, rdx
+    mov rsi, str
     syscall
 %endmacro
 
 section .data
-    str:    times 0x20 db 0x00
+    str:    times (STR_LEN + STACK_SIZE) db 0xff
     str_end:
+    stack:  times STACK_SIZE db 0x0a
 
 section .text
     global _start
@@ -62,17 +66,16 @@ _start:
 ; i = rsi, t1 = rdi
     ; initialize values and set tape<0> = 0
 
-    mov r10, rsp
-    sub rsp, COUNT_BYTES
-    and rsp, 0xfffffffffffffff0
-    mov r12, rsp
+    mov r10, rsp                ; save original stack pointer
+    sub rsp, COUNT_BYTES        ; allocate space
+    and rsp, 0xfffffffffffffff0 ; align to nearest 16-bytes
+    mov r12, rsp                ; move base of "tape" to r12 ("tape")
 
-    xor rsi, rsi                ; clear rsi
 
     ; need to set all of "tape" as 1's
     ; >implicit< mov rsi, 0x0
     mov rax, r12
-    mov rdi, rax
+    mov rdi, r12
     add rdi, COUNT_BYTES
 
 prefill_loop:
@@ -86,10 +89,9 @@ prefill_loop:
     jmp prefill_loop
 
 prefill_out:
-
     mov BYTE [tape], 0xfe
 
-    mov rsi, 0x0
+    xor rsi, rsi                ; clear rsi
 
 ; for (int i = 1; i < COUNT_BYTES; i++)
 main_loop_inc:
@@ -185,8 +187,10 @@ main_loop_out: ; } // implicit, from GOTO used previously
 %endif
 
     ; print "2\n"
-    mov WORD [str_end - 0x2], 0x0a32
+    mov WORD [str], 0x0a32
     SYS_PRINT 0x2
+
+    mov r9 , 0x1                ; set buf to 1
 
 ; how to print this correctly/nicely:
         ; rcx, ~r8~, r9 free/safe
@@ -194,6 +198,7 @@ main_loop_out: ; } // implicit, from GOTO used previously
         ; i = r8
     xor r8 , r8                 ; i = 0
 print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
+    xor r11, r11                ; count_digits = 0;
     inc r8                      ; i++
 
     cmp r8 , MAX                ; if (i >= MAX) break;
@@ -220,8 +225,8 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
     je print_loop_inc           ;
         ; rax, rdi free, rcx <reserved>
 
-    ; count = r9 
-    mov r9 , 0x1                ; count = 0;
+    ; count = r9
+;   mov r9 , 0x1                ; count = 0;
     ; j = rax
     ;     rdi reserved for division!
     mov rax, r8                 ; j = 2*i + 1; // can modify j without destroying i
@@ -229,32 +234,64 @@ print_loop_inc:             ; for (int i = 1; i < MAX; i++) {
     or  rax, 0x1
 
 calc_loop:
-    cmp rax, 0x0                ; if (j <= 0) break;
-    jle calc_loop_exit          ;
+    cmp rax, 0x0                ; if (j <= 0) break; // don't have to worry
+    jle calc_loop_exit          ;       about numbers ending in "0" as they
+                                ;       are always composite (n*10)
 
     inc r9                      ; count++; // pre-increment to keep string
                                 ;             accurate
 
     ; divide
     cdq
-    mov rcx, 0xa                ; must use reg
+    mov rcx, 0xa                ; must use reg, div by 10
     idiv rcx                    ; divide by 10 (0xa)
 
     add rdx, 0x30               ; char c = (j % 10) + 0x30;
-    mov rcx, str_end
-    sub rcx, r9
+;   mov rcx, str_end
+;   sub rcx, r9
+    mov rcx, stack
+    add rcx, r11
     mov BYTE [rcx], dl         ; *(str + count) = c;
-    xor rdi, rdi
+;   xor rdi, rdi
+    inc r11                     ; count_digits++;
 
     jmp calc_loop           ; }
 
 calc_loop_exit:
 
+    ; numbers are in wrong order, need to switch
+;   mov BYTE [stack - 0x0], 0x0a  ; for debug, shouldn't work?
+    mov rax, str - 0x1
+    add rax, r9
+    sub rax, r11
+swap_nums_loop:
+    mov dl, BYTE [rcx]
+    mov BYTE [rax], dl
+
+    inc rax
+    dec rcx
+
+    cmp rcx, stack
+    jge swap_nums_loop
+
+swap_nums_complete:
+
+    inc r9
+    mov BYTE [rax], 0x0a
+
+    cmp r9 , STR_LEN
+    jl  print_loop_inc
+
+    dec r9
     SYS_PRINT r9                ; print output
+
+    mov r9 , 0x1
 
     jmp print_loop_inc
                             ; }
 print_loop_out:
+    dec r9
+    SYS_PRINT r9                ; print remaining output
 
     add rsp, r10
 
